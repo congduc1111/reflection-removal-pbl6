@@ -1,8 +1,10 @@
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import glob
 import time
 import json
 import csv
+import gc
 import torch
 import cv2
 import numpy as np
@@ -365,7 +367,7 @@ class Solver:
         return configs
 
     def evaluate_single_dataset(self, b_dir, t_dir, save_images=False, out_dir=None):
-        """Đánh giá PSNR và SSIM trên 1 tập dữ liệu, có tùy chọn lưu ảnh kết quả."""
+        """Đánh giá PSNR và SSIM trên 1 tập dữ liệu với cơ chế tối ưu và bảo vệ VRAM."""
         if not b_dir or not os.path.exists(b_dir):
             return None, None, 0
         dataset = TestDataset(b_dir, t_dir)
@@ -378,23 +380,40 @@ class Solver:
         loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
         psnr_sum, ssim_sum, count = 0.0, 0.0, 0
 
-        with torch.no_grad():
+        with torch.inference_mode():
             for image, gt, fname in loader:
-                image = image.to(self.device)
-                pred_r = self.gr_model(image)
-                output_t, *_ = self.gt_model(image, pred_r)
+                image = image.to(self.device, non_blocking=True)
+
+                # Bảo vệ OOM cho các ảnh kích thước lớn (như real20 1114x717)
+                try:
+                    pred_r = self.gr_model(image)
+                    output_t, *_ = self.gt_model(image, pred_r)
+                except torch.OutOfMemoryError:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    h, w = image.shape[2], image.shape[3]
+                    scale = 0.75
+                    small_img = F.interpolate(image, size=(int(h * scale), int(w * scale)), mode='bilinear', align_corners=False)
+                    pred_r = self.gr_model(small_img)
+                    out_small, *_ = self.gt_model(small_img, pred_r)
+                    output_t = F.interpolate(out_small, size=(h, w), mode='bilinear', align_corners=False)
+                    del small_img, out_small
 
                 out_np = index.tensor2im(output_t)
+                del pred_r, output_t
+
                 if save_images and out_dir:
                     cv2.imwrite(os.path.join(out_dir, fname[0]), out_np)
 
                 if t_dir and os.path.exists(t_dir):
-                    gt = gt.to(self.device)
+                    gt = gt.to(self.device, non_blocking=True)
                     gt_np = index.tensor2im(gt)
+                    del gt
                     _, p, s = index.quality_assess(out_np, gt_np)
                     psnr_sum += p
                     ssim_sum += s
                     count += 1
+                del image
 
         avg_psnr = (psnr_sum / count) if count > 0 else None
         avg_ssim = (ssim_sum / count) if count > 0 else None
@@ -402,6 +421,7 @@ class Solver:
 
     def run_eval_epoch(self, epoch):
         """Đánh giá định kỳ mỗi X epochs (mặc định 5 epochs), cập nhật đồ thị và lưu model tốt nhất."""
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -603,18 +623,28 @@ class Solver:
         feat_loss = 0
         conv_list = [2, 7, 12, 21, 30]
         sigma_list = [1/2.6, 1/4.8, 1/3.7, 1/5.6, 10/1.5]
+
+        with torch.no_grad():
+            gt_feats = []
+            cur_gt = gt_t
+            for index in range(31):
+                cur_gt = self.vgg_feature.features[index](cur_gt)
+                if index in conv_list:
+                    gt_feats.append(cur_gt.detach())
+
         i = 0
+        cur_out = output_t
         for index in range(31):
-            output_t = self.vgg_feature.features[index](output_t)
-            gt_t = self.vgg_feature.features[index](gt_t)
+            cur_out = self.vgg_feature.features[index](cur_out)
             if index in conv_list:
-                feat_loss += self.l1_loss(output_t, gt_t) * sigma_list[i]
+                feat_loss += self.l1_loss(cur_out, gt_feats[i]) * sigma_list[i]
                 i += 1
         return feat_loss
 
     def fft_loss(self, pred_t, gt_t):
         fft_pred = torch.fft.rfft2(pred_t, norm='backward')
-        fft_gt = torch.fft.rfft2(gt_t, norm='backward')
+        with torch.no_grad():
+            fft_gt = torch.fft.rfft2(gt_t, norm='backward')
         return self.l1_loss(torch.abs(fft_pred), torch.abs(fft_gt)) + 0.1 * self.l1_loss(torch.angle(fft_pred), torch.angle(fft_gt))
 
     def exclusion_loss(self, img_T, img_R, level=3):
@@ -894,6 +924,14 @@ class Solver:
                 # ĐÁNH GIÁ CHU KỲ (MỖI 5 EPOCH HOẶC EPOCH CUỐI CÙNG)
                 # ===============================================================
                 if (cur_ep % self.eval_freq == 0) or (cur_ep == self.args.num_epochs):
+                    # Giải phóng triệt để gradient và cache của PyTorch trước khi bước vào eval
+                    self.GR_opt.zero_grad(set_to_none=True)
+                    self.G_opt.zero_grad(set_to_none=True)
+                    self.D_opt.zero_grad(set_to_none=True)
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
                     self.run_eval_epoch(cur_ep)
 
         except KeyboardInterrupt:

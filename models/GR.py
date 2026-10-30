@@ -23,7 +23,9 @@ class double_conv(nn.Module):
             nn.Conv2d(in_ch, in_ch, 3, padding=1), nn.BatchNorm2d(in_ch, track_running_stats=False), nn.ReLU(inplace=True),
             nn.Conv2d(in_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch, track_running_stats=False), nn.ReLU(inplace=True)
         )
-    def forward(self, x): return self.conv(x)
+
+    def forward(self, x):
+        return self.conv(x)
 
 class forth_conv(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -34,27 +36,29 @@ class forth_conv(nn.Module):
             nn.Conv2d(in_ch, in_ch, 3, padding=1), nn.BatchNorm2d(in_ch, track_running_stats=False), nn.ReLU(inplace=True),
             nn.Conv2d(in_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch, track_running_stats=False), nn.ReLU(inplace=True),
         )
-    def forward(self, x): return self.conv(x)
+
+    def forward(self, x):
+        return self.conv(x)
 
 class GR_Model(nn.Module):
     def __init__(self, encoder):
         super(GR_Model, self).__init__()
         self.encoder = encoder
-        self.upz1 = up(1024, 256, 4)  
+        self.upz1 = up(1024, 256, 4)
         self.upz2 = up(512, 128, 4)
         self.upz3 = up(256, 64, 2)
-        self.upz4 = up(128, 64, 2)  
-        self.outzc = nn.Conv2d(64, 3, 1)        
-        
+        self.upz4 = up(128, 64, 2)
+        self.outzc = nn.Conv2d(64, 3, 1)
+
     def forward(self, x):
         x1 = self.encoder.features[0:4](x)
-        x2 = self.encoder.features[4:9](x)
-        x3 = self.encoder.features[9:18](x)
-        x4 = self.encoder.features[18:27](x)
-        x5 = self.encoder.features[27:36](x)
+        x2 = self.encoder.features[4:9](x1)
+        x3 = self.encoder.features[9:18](x2)
+        x4 = self.encoder.features[18:27](x3)
+        x5 = self.encoder.features[27:36](x4)
 
-        z4 = self.upz1(x5, x4)   
-        z3 = self.upz2(z4, x3)   
+        z4 = self.upz1(x5, x4)
+        z3 = self.upz2(z4, x3)
         z2 = self.upz3(z3, x2)
         z1 = self.upz4(z2, x1)
-        return F.sigmoid(self.outzc(z1))
+        return torch.sigmoid(self.outzc(z1))

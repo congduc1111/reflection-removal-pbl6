@@ -18,6 +18,7 @@ class VGG(nn.Module):
     def __init__(self, features):
         super(VGG, self).__init__()
         self.features = features
+
     def forward(self, x):
         return self.features(x)
 

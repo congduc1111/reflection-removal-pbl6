@@ -381,39 +381,33 @@ class Solver:
         psnr_sum, ssim_sum, count = 0.0, 0.0, 0
 
         with torch.inference_mode():
-            for image, gt, fname in loader:
-                image = image.to(self.device, non_blocking=True)
+            for b_tensor, fname, orig_h, orig_w in loader:
+                b_tensor = b_tensor.to(self.device, non_blocking=True)
+                fname_str = fname[0]
+                oh, ow = int(orig_h[0]), int(orig_w[0])
 
-                # Bảo vệ OOM cho các ảnh kích thước lớn (như real20 1114x717)
-                try:
-                    pred_r = self.gr_model(image)
-                    output_t, *_ = self.gt_model(image, pred_r)
-                except torch.OutOfMemoryError:
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    h, w = image.shape[2], image.shape[3]
-                    scale = 0.75
-                    small_img = F.interpolate(image, size=(int(h * scale), int(w * scale)), mode='bilinear', align_corners=False)
-                    pred_r = self.gr_model(small_img)
-                    out_small, *_ = self.gt_model(small_img, pred_r)
-                    output_t = F.interpolate(out_small, size=(h, w), mode='bilinear', align_corners=False)
-                    del small_img, out_small
+                pred_r = self.gr_model(b_tensor)
+                output_t, *_ = self.gt_model(b_tensor, pred_r)
 
                 out_np = index.tensor2im(output_t)
-                del pred_r, output_t
+                del b_tensor, pred_r, output_t
+
+                # Phục hồi ảnh về kích thước gốc ban đầu
+                if out_np.shape[0] != oh or out_np.shape[1] != ow:
+                    out_np = cv2.resize(out_np, (ow, oh), interpolation=cv2.INTER_CUBIC)
 
                 if save_images and out_dir:
-                    cv2.imwrite(os.path.join(out_dir, fname[0]), out_np)
+                    cv2.imwrite(os.path.join(out_dir, fname_str), out_np)
 
                 if t_dir and os.path.exists(t_dir):
-                    gt = gt.to(self.device, non_blocking=True)
-                    gt_np = index.tensor2im(gt)
-                    del gt
-                    _, p, s = index.quality_assess(out_np, gt_np)
-                    psnr_sum += p
-                    ssim_sum += s
-                    count += 1
-                del image
+                    gt_path = os.path.join(t_dir, fname_str)
+                    if os.path.exists(gt_path):
+                        gt_np = cv2.imread(gt_path)
+                        if gt_np is not None:
+                            _, p, s = index.quality_assess(out_np, gt_np)
+                            psnr_sum += p
+                            ssim_sum += s
+                            count += 1
 
         avg_psnr = (psnr_sum / count) if count > 0 else None
         avg_ssim = (ssim_sum / count) if count > 0 else None

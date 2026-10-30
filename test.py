@@ -23,22 +23,32 @@ def evaluate_dataset(dataset_name, b_dir, t_dir, gt_model, gr_model, device, sav
     out_dir = os.path.join(save_dir, dataset_name)
     os.makedirs(out_dir, exist_ok=True)
 
-    with torch.no_grad():
-        for image, gt, fname in loader:
-            image = image.to(device)
-            pred_r = gr_model(image)
-            output_t, *_ = gt_model(image, pred_r)
+    with torch.inference_mode():
+        for b_tensor, fname, orig_h, orig_w in loader:
+            b_tensor = b_tensor.to(device, non_blocking=True)
+            fname_str = fname[0]
+            oh, ow = int(orig_h[0]), int(orig_w[0])
+
+            pred_r = gr_model(b_tensor)
+            output_t, *_ = gt_model(b_tensor, pred_r)
 
             out_np = index.tensor2im(output_t)
-            cv2.imwrite(os.path.join(out_dir, fname[0]), out_np)
+            del b_tensor, pred_r, output_t
+
+            if out_np.shape[0] != oh or out_np.shape[1] != ow:
+                out_np = cv2.resize(out_np, (ow, oh), interpolation=cv2.INTER_CUBIC)
+
+            cv2.imwrite(os.path.join(out_dir, fname_str), out_np)
 
             if t_dir and os.path.exists(t_dir):
-                gt = gt.to(device)
-                gt_np = index.tensor2im(gt)
-                _, p, s = index.quality_assess(out_np, gt_np)
-                psnr_sum += p
-                ssim_sum += s
-                count += 1
+                gt_path = os.path.join(t_dir, fname_str)
+                if os.path.exists(gt_path):
+                    gt_np = cv2.imread(gt_path)
+                    if gt_np is not None:
+                        _, p, s = index.quality_assess(out_np, gt_np)
+                        psnr_sum += p
+                        ssim_sum += s
+                        count += 1
 
     if count > 0:
         avg_p = psnr_sum / count

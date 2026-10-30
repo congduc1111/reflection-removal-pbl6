@@ -245,23 +245,25 @@ class TestDataset(Dataset):
         if b_img is None:
             b_img = np.zeros((256, 256, 3), dtype=np.uint8)
 
-        if self.trans_dir and os.path.exists(self.trans_dir):
-            t_path = os.path.join(self.trans_dir, fname)
-            if os.path.exists(t_path):
-                t_img = cv2.imread(t_path)
-            else:
-                t_img = b_img.copy()
+        orig_h, orig_w = b_img.shape[:2]
+        max_side = max(orig_h, orig_w)
+
+        # Điều chỉnh kích thước an toàn cho VRAM (max side <= 512, chia hết cho 32)
+        if max_side > 512:
+            scale = 512.0 / max_side
+            eval_h = max(32, int(round(orig_h * scale / 32.0)) * 32)
+            eval_w = max(32, int(round(orig_w * scale / 32.0)) * 32)
+            b_eval = cv2.resize(b_img, (eval_w, eval_h), interpolation=cv2.INTER_AREA)
         else:
-            t_img = b_img.copy()
+            eval_h = max(32, (orig_h // 32) * 32)
+            eval_w = max(32, (orig_w // 32) * 32)
+            if eval_h != orig_h or eval_w != orig_w:
+                b_eval = cv2.resize(b_img, (eval_w, eval_h), interpolation=cv2.INTER_AREA)
+            else:
+                b_eval = b_img
 
-        if t_img is None:
-            t_img = b_img.copy()
-
-        return (
-            self.to_tensor(np.ascontiguousarray(b_img.astype(np.float32) / 255.0)),
-            self.to_tensor(np.ascontiguousarray(t_img.astype(np.float32) / 255.0)),
-            fname
-        )
+        b_tensor = self.to_tensor(np.ascontiguousarray(b_eval.astype(np.float32) / 255.0))
+        return b_tensor, fname, orig_h, orig_w
 
     def __len__(self):
         return len(self.blended_files)

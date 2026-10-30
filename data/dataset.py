@@ -140,7 +140,7 @@ class CurriculumSynDataset(Dataset):
         return patch
 
     def __len__(self):
-        return max(len(self.t_paths), 1)
+        return len(self.t_paths)
 
     def __getitem__(self, index):
         if not self.t_paths:

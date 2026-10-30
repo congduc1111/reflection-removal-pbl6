@@ -224,6 +224,10 @@ class Solver:
     def _find_test_root(self, specified_path):
         candidates = [
             specified_path,
+            "/kaggle/input/datasets/congduc1122/pbl6-dataset500/dataset500/dataset500/testsets",
+            "/kaggle/input/pbl6-dataset500/dataset500/dataset500/testsets",
+            "/kaggle/input/datasets/congduc1122/pbl6-dataset500/testsets",
+            "/kaggle/input/pbl6-dataset500/testsets",
             os.path.join(getattr(self.args, 'data_root', ''), 'testsets'),
             os.path.join(getattr(self.args, 'data_root', ''), 'test'),
             os.path.join(os.path.dirname(getattr(self.args, 'data_root', '')), 'testsets'),
@@ -239,11 +243,17 @@ class Solver:
         for c in candidates:
             if c and os.path.isdir(c):
                 return os.path.abspath(c)
+        if os.path.isdir("/kaggle/input"):
+            for root, dirs, _ in os.walk("/kaggle/input"):
+                if "testsets" in dirs or ("real20" in dirs and "PostcardDataset" in dirs):
+                    return os.path.abspath(os.path.join(root, "testsets") if "testsets" in dirs else root)
         return specified_path if specified_path else "./dataset500/testsets"
 
     def _find_vgg_ckpt(self, specified_path):
         candidates = [
             specified_path,
+            "/kaggle/input/datasets/congduc1122/pbl6-dataset500/vgg19-dcbb9e9d.pth",
+            "/kaggle/input/pbl6-dataset500/vgg19-dcbb9e9d.pth",
             './checkpoints/vgg19-dcbb9e9d.pth',
             '../checkpoints/vgg19-dcbb9e9d.pth',
             './checkpoint/vgg19-dcbb9e9d.pth',
@@ -254,6 +264,11 @@ class Solver:
         for c in candidates:
             if c and os.path.isfile(c):
                 return c
+        if os.path.isdir("/kaggle/input"):
+            for root, _, files in os.walk("/kaggle/input"):
+                for f in files:
+                    if "vgg19" in f and f.endswith(".pth"):
+                        return os.path.abspath(os.path.join(root, f))
         return None
 
     def _load_metrics_history(self):
@@ -632,6 +647,68 @@ class Solver:
             mask_encoder_loss += self.l1_loss(list_map_encoder[i] * list_mask_encoder[i], list_map_encoder[i] * 0)
         return mask_loss + mask_encoder_loss
 
+    def _find_train_dirs(self):
+        real_dirs = []
+        syn_dir = None
+
+        search_roots = [
+            self.args.data_root,
+            os.path.join(getattr(self.args, 'data_root', ''), "dataset500"),
+            os.path.join(getattr(self.args, 'data_root', ''), "dataset500", "dataset500"),
+            "/kaggle/input/datasets/congduc1122/pbl6-dataset500/dataset500/dataset500",
+            "/kaggle/input/pbl6-dataset500/dataset500/dataset500",
+            "/kaggle/input/datasets/congduc1122/pbl6-dataset500",
+            "/kaggle/input/pbl6-dataset500",
+            "../dataset500",
+            "./dataset500",
+            "dataset500",
+        ]
+
+        # 1. Tìm real_dirs
+        for root in search_roots:
+            if not root or not os.path.isdir(root):
+                continue
+            for cand in [
+                os.path.join(root, "train", "real"),
+                os.path.join(root, "real"),
+                os.path.join(root, "train", "nature"),
+                os.path.join(root, "nature")
+            ]:
+                if os.path.isdir(cand) and cand not in real_dirs:
+                    if os.path.isdir(os.path.join(cand, 'blended')) or any(os.path.isdir(os.path.join(cand, sub)) for sub in ['transmission_layer']):
+                        real_dirs.append(cand)
+
+        # 2. Tìm syn_dir
+        for root in search_roots:
+            if not root or not os.path.isdir(root):
+                continue
+            for cand in [
+                os.path.join(root, "train", "synthetic"),
+                os.path.join(root, "synthetic"),
+                os.path.join(root, "train", "VOCdevkit", "VOC2012", "PNGImages"),
+                os.path.join(root, "VOCdevkit", "VOC2012", "PNGImages")
+            ]:
+                if os.path.isdir(cand):
+                    syn_dir = cand
+                    break
+            if syn_dir:
+                break
+
+        # 3. Quét tự động trong /kaggle/input nếu vẫn chưa thấy
+        if not real_dirs or not syn_dir:
+            if os.path.isdir("/kaggle/input"):
+                for cur_root, dirs, _ in os.walk("/kaggle/input"):
+                    if not real_dirs and "real" in dirs:
+                        cand_real = os.path.join(cur_root, "real")
+                        if os.path.isdir(os.path.join(cand_real, "blended")):
+                            real_dirs.append(cand_real)
+                    if not syn_dir and "synthetic" in dirs:
+                        cand_syn = os.path.join(cur_root, "synthetic")
+                        if os.path.isdir(os.path.join(cand_syn, "reflection_layer")) or os.path.isdir(os.path.join(cand_syn, "transmission_layer")):
+                            syn_dir = cand_syn
+
+        return real_dirs, syn_dir
+
     def train_model(self):
         self.gr_model = GR_Model(self.encoder).to(self.device)
         self.gt_model = GT_Model(self.encoder_I, self.encoder_R).to(self.device)
@@ -659,29 +736,17 @@ class Solver:
             print(f"✅ Đã nạp thành công! Tiếp tục train từ Epoch {self.start_epoch + 1}", flush=True)
 
         # Tự động tìm kiếm thư mục dữ liệu train
-        real_dirs = []
-        for candidate in [
-            os.path.join(self.args.data_root, "train", "real"),
-            os.path.join(self.args.data_root, "real"),
-            os.path.join(self.args.data_root, "train", "nature"),
-            os.path.join(self.args.data_root, "nature")
-        ]:
-            if os.path.isdir(candidate):
-                real_dirs.append(candidate)
-
-        syn_dir = None
-        for candidate in [
-            os.path.join(self.args.data_root, "train", "synthetic"),
-            os.path.join(self.args.data_root, "synthetic"),
-            os.path.join(self.args.data_root, "train", "VOCdevkit", "VOC2012", "PNGImages"),
-            os.path.join(self.args.data_root, "VOCdevkit", "VOC2012", "PNGImages")
-        ]:
-            if os.path.isdir(candidate):
-                syn_dir = candidate
-                break
+        real_dirs, syn_dir = self._find_train_dirs()
 
         print(f"[Solver] Thư mục ảnh thực tế tìm thấy: {real_dirs}")
         print(f"[Solver] Thư mục ảnh tổng hợp tìm thấy: {syn_dir}")
+
+        if not real_dirs and not syn_dir:
+            raise RuntimeError(
+                f"❌ LỖI DỮ LIỆU: Không tìm thấy thư mục 'train/real' hoặc 'train/synthetic'!\n"
+                f"Data Root được truyền: '{self.args.data_root}'\n"
+                f"Vui lòng kiểm tra lại đường dẫn dataset trong /kaggle/input."
+            )
 
         train_real_dataset = RealPairDataset(real_dirs, crop_size=256) if real_dirs else None
         train_syn_dataset = VocCurriculumSynDataset(syn_dir, crop_size=256) if syn_dir else None
@@ -833,8 +898,13 @@ class Solver:
 
         except KeyboardInterrupt:
             print("\n⚠️ Quá trình huấn luyện bị tạm dừng bởi người dùng (KeyboardInterrupt)!", flush=True)
-        finally:
-            # ===============================================================
-            # TỰ ĐỘNG CHỌN EPOCH TỐT NHẤT VÀ XUẤT TOÀN BỘ ẢNH RA THƯ MỤC result/
-            # ===============================================================
+
+        # ===============================================================
+        # TỰ ĐỘNG CHỌN EPOCH TỐT NHẤT VÀ XUẤT TOÀN BỘ ẢNH RA THƯ MỤC result/
+        # Chỉ thực hiện khi đã huấn luyện ít nhất 1 epoch hoặc đã có best.pth
+        # ===============================================================
+        best_ckpt_path = os.path.join(self.checkpoint_dir, 'best.pth')
+        if self.best_epoch > 0 or os.path.isfile(best_ckpt_path):
             self.run_final_test_and_save_results()
+        else:
+            print("\nℹ️ Quá trình train dừng trước khi hoàn thành epoch nào, bỏ qua xuất ảnh kết quả cuối cùng.")

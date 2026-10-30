@@ -4,6 +4,10 @@ from solver import Solver
 
 def get_default_data_root():
     candidates = [
+        "/kaggle/input/datasets/congduc1122/pbl6-dataset500/dataset500/dataset500",
+        "/kaggle/input/pbl6-dataset500/dataset500/dataset500",
+        "/kaggle/input/datasets/congduc1122/pbl6-dataset500",
+        "/kaggle/input/pbl6-dataset500",
         "../dataset500",
         "./dataset500",
         "dataset500",
@@ -13,10 +17,19 @@ def get_default_data_root():
     for c in candidates:
         if os.path.exists(c):
             return c
+    # Quét tự động trong /kaggle/input
+    if os.path.isdir("/kaggle/input"):
+        for root, dirs, _ in os.walk("/kaggle/input"):
+            if "train" in dirs and ("real" in os.listdir(os.path.join(root, "train")) or "synthetic" in os.listdir(os.path.join(root, "train"))):
+                return root
     return candidates[0]
 
 def get_default_test_root():
     candidates = [
+        "/kaggle/input/datasets/congduc1122/pbl6-dataset500/dataset500/dataset500/testsets",
+        "/kaggle/input/pbl6-dataset500/dataset500/dataset500/testsets",
+        "/kaggle/input/datasets/congduc1122/pbl6-dataset500/testsets",
+        "/kaggle/input/pbl6-dataset500/testsets",
         "../dataset500/testsets",
         "./dataset500/testsets",
         "dataset500/testsets",
@@ -33,10 +46,17 @@ def get_default_test_root():
     for c in candidates:
         if os.path.exists(c):
             return c
+    # Quét tự động trong /kaggle/input
+    if os.path.isdir("/kaggle/input"):
+        for root, dirs, _ in os.walk("/kaggle/input"):
+            if "testsets" in dirs or ("real20" in dirs and "PostcardDataset" in dirs):
+                return os.path.join(root, "testsets") if "testsets" in dirs else root
     return candidates[0]
 
 def get_default_vgg_ckpt():
     candidates = [
+        "/kaggle/input/datasets/congduc1122/pbl6-dataset500/vgg19-dcbb9e9d.pth",
+        "/kaggle/input/pbl6-dataset500/vgg19-dcbb9e9d.pth",
         "./checkpoints/vgg19-dcbb9e9d.pth",
         "../checkpoints/vgg19-dcbb9e9d.pth",
         "./checkpoint/vgg19-dcbb9e9d.pth",
@@ -47,6 +67,12 @@ def get_default_vgg_ckpt():
     for c in candidates:
         if os.path.isfile(c):
             return c
+    # Quét tự động trong /kaggle/input
+    if os.path.isdir("/kaggle/input"):
+        for root, _, files in os.walk("/kaggle/input"):
+            for f in files:
+                if "vgg19" in f and f.endswith(".pth"):
+                    return os.path.join(root, f)
     return candidates[0]
 
 def get_default_save_dir():
